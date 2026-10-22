@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树 · 智能课程自动下一节（必学 x/y）
 // @namespace    local.zhs.smartcourse
-// @version      1.9.20
+// @version      1.9.21
 // @description  适配 ai-smart-course-student-pro / smartcoursestudent：播完自动切下一知识点，未记为完成则重播
 // @author       local
 // @match        *://ai-smart-course-student-pro.zhihuishu.com/*
@@ -37,7 +37,7 @@
     verbose: true,            // 控制台日志
   };
 
-  const VERSION = '1.9.20';
+  const VERSION = '1.9.21';
   const IS_TOP = (() => { try { return window.top === window; } catch (e) { return true; } })();
 
   /* ---------- 关键接口嗅探 ----------
@@ -1115,14 +1115,14 @@
       };
       const theme = norm(k.theme);
       const triedUnits = new Set();
-      for (let round = 0; round < 8 && !row; round++) {
+      let targetUnitTried = false;
+      for (let round = 0; round < 10 && !row; round++) {
         const hs = sectionHeaders();
-        // 1) 目标单元已经渲染：展开它
+        // 1) 目标单元：先展开它（只试一次）
         const unit = unitOf(hs);
-        if (unit) {
-          const un = textOfEl(unit);
-          if (triedUnits.has(un)) break;   // 展开过还找不到行，别反复点
-          triedUnits.add(un);
+        if (unit && !targetUnitTried) {
+          targetUnitTried = true;
+          triedUnits.add(textOfEl(unit));
           await openUnitAuto(unit);
           smartCacheAt = 0;
           row = findRow();
@@ -1135,15 +1135,17 @@
           await clickHeader(mod);
           continue;
         }
-        // 3) 模块展开后逐个展开它下面的单元，直到目标行出现
+        // 3) 目标单元里没有：继续展开同模块下其它单元，最后遍历全页
         const mi = mod ? hs.indexOf(mod) : -1;
-        const nextUnit = hs.slice(mi + 1).find((h) =>
+        const afterMod = hs.slice(mi + 1).filter((h) =>
           /^知识单元/.test(textOfEl(h)) && rowsUnder(hs, h).length === 0 &&
-          !triedUnits.has(textOfEl(h)) &&
-          (!mod || isAfter(mod, h)));
-        if (nextUnit) {
-          triedUnits.add(textOfEl(nextUnit));
-          await openUnitAuto(nextUnit);
+          !triedUnits.has(textOfEl(h)) && (!mod || isAfter(mod, h)));
+        const anyUnit = afterMod[0] || hs.find((h) =>
+          /^知识单元/.test(textOfEl(h)) && rowsUnder(hs, h).length === 0 &&
+          !triedUnits.has(textOfEl(h)));
+        if (anyUnit) {
+          triedUnits.add(textOfEl(anyUnit));
+          await openUnitAuto(anyUnit);
           smartCacheAt = 0;
           row = findRow();
           continue;

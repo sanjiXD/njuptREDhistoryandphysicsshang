@@ -1,4 +1,4 @@
-# 智慧树 / AI 智慧课程 自动连播脚本
+﻿# 智慧树 / AI 智慧课程 自动连播脚本
 
 两个 Tampermonkey（油猴）用户脚本，用于在课程视频播放结束后自动进入下一节，并把播放状态、完成状态做成可观察的日志。
 
@@ -8,8 +8,8 @@
 
 | 脚本 | 适用平台 | 页面特征 |
 | --- | --- | --- |
-| `zhs-auto-next-v2.user.js` | 智慧树 AI 教学中心（`*.polymas.com`、`*.zhihuishu.com` 旧版课程页） | 左侧为 `el-tree` 目录，节点带 `data-key`，完成后百分比消失或打勾 |
-| `zhs-smart-course.user.js` | AI 智慧课程 / 新形态课程（`ai-smart-course-student-pro.zhihuishu.com`、`smartcoursestudent.zhihuishu.com`） | 左侧是“知识模块 → 知识单元 → 知识点”三级折叠目录，进度显示为 `必学 x/y` |
+| `redhistory.js` | 智慧树 AI 教学中心（`*.polymas.com`、`*.zhihuishu.com` 旧版课程页） | 左侧为 `el-tree` 目录，节点带 `data-key`，完成后百分比消失或打勾 |
+| `wulishang.js` | AI 智慧课程 / 新形态课程（`ai-smart-course-student-pro.zhihuishu.com`、`smartcoursestudent.zhihuishu.com`） | 左侧是“知识模块 → 知识单元 → 知识点”三级折叠目录，进度显示为 `必学 x/y` |
 
 ## 功能
 
@@ -54,7 +54,7 @@ __ZHS__.resume()     // 恢复
 __ZHS__.reset()      // 清空本地状态并刷新页面
 ```
 
-`zhs-smart-course.user.js` 额外提供：
+`wulishang.js` 额外提供：
 
 ```js
 __ZHS__.api()        // 接口判定结果：当前/下一知识点、资源完成度
@@ -91,8 +91,8 @@ __ZHS__.probe()      // 导出目标行的 HTML，便于适配
 ```
 .
 ├── README.md
-├── zhs-auto-next-v2.user.js      # AI 教学中心 / el-tree 目录
-├── zhs-smart-course.user.js      # AI 智慧课程 / 三级折叠目录
+├── redhistory.js      # AI 教学中心 / el-tree 目录
+├── wulishang.js      # AI 智慧课程 / 三级折叠目录
 └── tools
     ├── zhs-net-sniffer.user.js   # 网络请求嗅探（诊断用，不修改页面）
     └── zhs-scan.js               # 页面结构扫描（控制台粘贴运行）

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树 · 智能课程自动下一节（必学 x/y）
 // @namespace    local.zhs.smartcourse
-// @version      1.9.19
+// @version      1.9.20
 // @description  适配 ai-smart-course-student-pro / smartcoursestudent：播完自动切下一知识点，未记为完成则重播
 // @author       local
 // @match        *://ai-smart-course-student-pro.zhihuishu.com/*
@@ -37,7 +37,7 @@
     verbose: true,            // 控制台日志
   };
 
-  const VERSION = '1.9.19';
+  const VERSION = '1.9.20';
   const IS_TOP = (() => { try { return window.top === window; } catch (e) { return true; } })();
 
   /* ---------- 关键接口嗅探 ----------
@@ -1076,17 +1076,32 @@
 
   async function clickKnowledgeByName(k) {
     const targetNorm = norm(k.name);
+    // 行文本常带“免考/新/已学”等后缀，允许前缀匹配
+    const sameName = (t) => {
+      if (!t) return false;
+      if (t === targetNorm) return true;
+      if (t.indexOf(targetNorm) === 0 && t.length <= targetNorm.length + 4) return true;
+      return false;
+    };
     const findRow = () => {
       const rows = itemsNow();
-      const hit = rows.find((el) => norm(state.adapter.label(el)) === targetNorm);
+      const hit = rows.find((el) => sameName(norm(state.adapter.label(el))));
       if (hit) return hit;
       // 只在“可见”的文字里找，避免点到折叠留下的隐藏副本
       for (const el of all('*')) {
         if (el.children.length) continue;
-        if (norm(el.textContent || '') !== targetNorm) continue;
+        if (!sameName(norm(el.textContent || ''))) continue;
         if (!visible(el)) continue;
-        const row = el.closest('div, li, a');
-        if (row && /必学\d+\/\d+/.test(row.textContent || '')) return el;  // 直接点文字，事件会冒泡到行
+        // 向上找到“行”大小的那层（不要求有“必学”，免考单元没有这个文本）
+        let r = el;
+        for (let i = 0; i < 4; i++) {
+          const p = r.parentElement;
+          if (!p) break;
+          const pr = p.getBoundingClientRect();
+          if (pr.height > 120 || pr.width < 80) break;
+          if (pr.height >= 24) r = p;
+        }
+        if (visible(r)) return r;
       }
       return null;
     };
@@ -1099,11 +1114,15 @@
         return list.find((h) => /^知识单元/.test(textOfEl(h)) && textOfEl(h).indexOf(un) >= 0) || null;
       };
       const theme = norm(k.theme);
+      const triedUnits = new Set();
       for (let round = 0; round < 8 && !row; round++) {
         const hs = sectionHeaders();
         // 1) 目标单元已经渲染：展开它
         const unit = unitOf(hs);
         if (unit) {
+          const un = textOfEl(unit);
+          if (triedUnits.has(un)) break;   // 展开过还找不到行，别反复点
+          triedUnits.add(un);
           await openUnitAuto(unit);
           smartCacheAt = 0;
           row = findRow();
@@ -1120,8 +1139,10 @@
         const mi = mod ? hs.indexOf(mod) : -1;
         const nextUnit = hs.slice(mi + 1).find((h) =>
           /^知识单元/.test(textOfEl(h)) && rowsUnder(hs, h).length === 0 &&
+          !triedUnits.has(textOfEl(h)) &&
           (!mod || isAfter(mod, h)));
         if (nextUnit) {
+          triedUnits.add(textOfEl(nextUnit));
           await openUnitAuto(nextUnit);
           smartCacheAt = 0;
           row = findRow();

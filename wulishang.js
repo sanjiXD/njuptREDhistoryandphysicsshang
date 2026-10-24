@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树 · 智能课程自动下一节（必学 x/y）
 // @namespace    local.zhs.smartcourse
-// @version      1.9.21
+// @version      1.9.22
 // @description  适配 ai-smart-course-student-pro / smartcoursestudent：播完自动切下一知识点，未记为完成则重播
 // @author       local
 // @match        *://ai-smart-course-student-pro.zhihuishu.com/*
@@ -37,7 +37,7 @@
     verbose: true,            // 控制台日志
   };
 
-  const VERSION = '1.9.21';
+  const VERSION = '1.9.22';
   const IS_TOP = (() => { try { return window.top === window; } catch (e) { return true; } })();
 
   /* ---------- 关键接口嗅探 ----------
@@ -875,6 +875,8 @@
     let el = unitHeader;
     for (let level = 0; level < 5 && el; level++) {
       step(`尝试点击第 ${level} 层`);
+      try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+      await sleep(150);
       fireClick(el);
       const t0 = Date.now();
       while (Date.now() - t0 < 2500) {
@@ -921,12 +923,16 @@
 
     if (isOpen()) return true;
     log('点击：', short(el.textContent, 24));
+    try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+    await sleep(150);
     fireClick(el);
     if (await waitOpen(4000)) return true;
 
     const p = el.parentElement;
     if (p) {
       log('文字没反应，再点父级');
+      try { p.scrollIntoView({ block: 'center' }); } catch (e) {}
+      await sleep(150);
       fireClick(p);
       if (await waitOpen(3000)) return true;
     }
@@ -1116,6 +1122,7 @@
       const theme = norm(k.theme);
       const triedUnits = new Set();
       let targetUnitTried = false;
+      const triedModules = new Map();
       for (let round = 0; round < 10 && !row; round++) {
         const hs = sectionHeaders();
         // 1) 目标单元：先展开它（只试一次）
@@ -1128,9 +1135,13 @@
           row = findRow();
           continue;
         }
-        // 2) 目标模块还收着：先展开模块
+        // 2) 目标模块还收着：先展开模块（同一模块最多试两次）
         const mod = hs.find((h) => /^知识模块/.test(textOfEl(h)) && theme && textOfEl(h).indexOf(theme) >= 0);
         if (mod && !hasChildHeader(hs, mod)) {
+          const mk = textOfEl(mod);
+          const n = triedModules.get(mk) || 0;
+          if (n >= 2) break;
+          triedModules.set(mk, n + 1);
           step('展开模块：' + short(mod.textContent, 16));
           await clickHeader(mod);
           continue;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树 · 智能课程自动下一节（必学 x/y）
 // @namespace    local.zhs.smartcourse
-// @version      1.9.23
+// @version      1.9.24
 // @description  适配 ai-smart-course-student-pro / smartcoursestudent：播完自动切下一知识点，未记为完成则重播
 // @author       local
 // @match        *://ai-smart-course-student-pro.zhihuishu.com/*
@@ -37,7 +37,7 @@
     verbose: true,            // 控制台日志
   };
 
-  const VERSION = '1.9.23';
+  const VERSION = '1.9.24';
   const IS_TOP = (() => { try { return window.top === window; } catch (e) { return true; } })();
 
   /* ---------- 关键接口嗅探 ----------
@@ -904,6 +904,20 @@
 
   /* 只点一次，然后盯住“这个标题下面有没有出现行/子标题”。
      不能拿全局变化当依据，也不能急着点父级——折叠组件点两次会关回去。 */
+  /* 让目录里被裁掉的部分渲染出来：找到可滚动的祖先，往下滚一段 */
+  function nudgeScroll(el, dy = 280) {
+    let p = el && el.parentElement;
+    while (p) {
+      const s = style(p);
+      if (s && /(auto|scroll)/.test(s.overflowY) && p.scrollHeight > p.clientHeight + 20) {
+        try { p.scrollTop = Math.min(p.scrollHeight, p.scrollTop + dy); } catch (e) {}
+        return true;
+      }
+      p = p.parentElement;
+    }
+    return false;
+  }
+
   async function clickHeader(el) {
     const isOpen = () => {
       const hs = sectionHeaders();
@@ -926,10 +940,11 @@
     // 从标题文字开始，逐层向上点（最多 5 层），每层都检查是否展开
     let node = el;
     for (let level = 0; level < 5 && node; level++) {
-      log('点击层级', level, short(node.textContent, 20));
+      step(`点击层级 ${level}`);
       try { node.scrollIntoView({ block: 'center' }); } catch (e) {}
       await sleep(150);
       fireClick(node);
+      nudgeScroll(node);
       if (await waitOpen(level === 0 ? 3000 : 2000)) return true;
       node = node.parentElement;
     }
@@ -939,10 +954,11 @@
     const icon = holder.querySelector &&
       holder.querySelector('svg, i, [class*="arrow"], [class*="caret"], [class*="icon"]');
     if (icon) {
-      log('点击箭头图标');
+      step('点击箭头图标');
       try { icon.scrollIntoView({ block: 'center' }); } catch (e) {}
       await sleep(150);
       fireClick(icon);
+      nudgeScroll(icon);
       if (await waitOpen(2500)) return true;
     }
     return false;

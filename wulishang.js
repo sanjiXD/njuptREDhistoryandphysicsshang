@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树 · 智能课程自动下一节（必学 x/y）
 // @namespace    local.zhs.smartcourse
-// @version      1.9.22
+// @version      1.9.23
 // @description  适配 ai-smart-course-student-pro / smartcoursestudent：播完自动切下一知识点，未记为完成则重播
 // @author       local
 // @match        *://ai-smart-course-student-pro.zhihuishu.com/*
@@ -37,7 +37,7 @@
     verbose: true,            // 控制台日志
   };
 
-  const VERSION = '1.9.22';
+  const VERSION = '1.9.23';
   const IS_TOP = (() => { try { return window.top === window; } catch (e) { return true; } })();
 
   /* ---------- 关键接口嗅探 ----------
@@ -922,19 +922,28 @@
     };
 
     if (isOpen()) return true;
-    log('点击：', short(el.textContent, 24));
-    try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
-    await sleep(150);
-    fireClick(el);
-    if (await waitOpen(4000)) return true;
 
-    const p = el.parentElement;
-    if (p) {
-      log('文字没反应，再点父级');
-      try { p.scrollIntoView({ block: 'center' }); } catch (e) {}
+    // 从标题文字开始，逐层向上点（最多 5 层），每层都检查是否展开
+    let node = el;
+    for (let level = 0; level < 5 && node; level++) {
+      log('点击层级', level, short(node.textContent, 20));
+      try { node.scrollIntoView({ block: 'center' }); } catch (e) {}
       await sleep(150);
-      fireClick(p);
-      if (await waitOpen(3000)) return true;
+      fireClick(node);
+      if (await waitOpen(level === 0 ? 3000 : 2000)) return true;
+      node = node.parentElement;
+    }
+
+    // 最后试一次卡片里的箭头图标
+    const holder = el.parentElement || el;
+    const icon = holder.querySelector &&
+      holder.querySelector('svg, i, [class*="arrow"], [class*="caret"], [class*="icon"]');
+    if (icon) {
+      log('点击箭头图标');
+      try { icon.scrollIntoView({ block: 'center' }); } catch (e) {}
+      await sleep(150);
+      fireClick(icon);
+      if (await waitOpen(2500)) return true;
     }
     return false;
   }

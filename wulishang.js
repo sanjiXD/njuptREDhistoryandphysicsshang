@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树 · 智能课程自动下一节（必学 x/y）
 // @namespace    local.zhs.smartcourse
-// @version      1.9.24
+// @version      1.9.25
 // @description  适配 ai-smart-course-student-pro / smartcoursestudent：播完自动切下一知识点，未记为完成则重播
 // @author       local
 // @match        *://ai-smart-course-student-pro.zhihuishu.com/*
@@ -37,7 +37,7 @@
     verbose: true,            // 控制台日志
   };
 
-  const VERSION = '1.9.24';
+  const VERSION = '1.9.25';
   const IS_TOP = (() => { try { return window.top === window; } catch (e) { return true; } })();
 
   /* ---------- 关键接口嗅探 ----------
@@ -919,10 +919,13 @@
   }
 
   async function clickHeader(el) {
+    const isModuleHeader = /^知识模块/.test(textOfEl(el));
     const isOpen = () => {
       const hs = sectionHeaders();
       const t = hs.includes(el) ? el : hs.find((x) => textOfEl(x) === textOfEl(el));
       if (!t) return false;
+      // 模块只认“下面有没有单元标题”；单元才看知识点行
+      if (isModuleHeader) return hasChildHeader(hs, t);
       return rowsUnder(hs, t).length > 0 || hasChildHeader(hs, t);
     };
     const waitOpen = async (maxMs) => {

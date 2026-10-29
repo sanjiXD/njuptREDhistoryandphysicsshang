@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树 · 智能课程自动下一节（必学 x/y）
 // @namespace    local.zhs.smartcourse
-// @version      1.9.25
+// @version      2.0.0
 // @description  适配 ai-smart-course-student-pro / smartcoursestudent：播完自动切下一知识点，未记为完成则重播
 // @author       local
 // @match        *://ai-smart-course-student-pro.zhihuishu.com/*
@@ -37,7 +37,7 @@
     verbose: true,            // 控制台日志
   };
 
-  const VERSION = '1.9.25';
+  const VERSION = '2.0.0';
   const IS_TOP = (() => { try { return window.top === window; } catch (e) { return true; } })();
 
   /* ---------- 关键接口嗅探 ----------
@@ -261,6 +261,104 @@
       total: d.resourcesTime,
       clip: q.videoStartTime != null ? q.videoStartTime + '-' + q.videoEndTime : '',
     };
+  }
+
+  /* ==================== 课件级推进（一个知识点多个课件 / PPT 课件） ====================
+     课程里有两类情况：
+       1) 一个知识点挂多个课件（左栏“必学 1/2”），视频播完只是第一个课件完成，还得点第二个；
+       2) 整个知识点只有 PPT/文档，没有 <video>，点进卡片平台就算已学习。
+     所以“视频结束”不等于“知识点结束”：先看这个知识点还有没有没完成的课件，
+     有就点右侧“必学资源”里的那张卡片；全部课件都完成了才进下一个知识点。 */
+  function resDoneOne(r) {
+    if (!r) return true;
+    if (r.studyStatus === 1) return true;
+    return typeof r.schedule === 'number' && r.schedule >= 100;
+  }
+
+  function resName(r) {
+    const d = (r && r.resourcesDetail) || {};
+    return String(d.resourcesName || '');
+  }
+
+  function isPptResource(r) {
+    const d = (r && r.resourcesDetail) || {};
+    const n = resName(r) + ' ' + String(d.resourcesUrl || '');
+    return /\.(pptx?|pdf|docx?|xlsx?)(\b|$)/i.test(n);
+  }
+
+  // 只看“必学资源”区域的卡片，避免把“选学资源”也算进来
+  function reqScopes() {
+    const out = [];
+    for (const el of all('*')) {
+      if (el.children.length) continue;
+      if (!/^必学资源$/.test(String(el.textContent || '').trim())) continue;
+      let node = el;
+      for (let i = 0; i < 3 && node.parentElement; i++) node = node.parentElement;
+      out.push(node);
+    }
+    return out.length ? out : [document];
+  }
+
+  function cardDone(card) {
+    const t = norm(card && card.textContent);
+    return t.indexOf('已完成') >= 0 || t.indexOf('已学完') >= 0;
+  }
+
+  function cardOf(r) {
+    const raw = norm(resName(r)).replace(/\.(mp4|m4v|mp3|pptx?|pdf|docx?|xlsx?|zip|rar)$/i, '');
+    if (!raw || raw.length < 3) return null;
+    for (const scope of reqScopes()) {
+      let best = null;
+      let nodes = [];
+      try { nodes = scope.querySelectorAll('*'); } catch (e) { continue; }
+      for (const el of nodes) {
+        if (el.children.length) continue;
+        if (!visible(el)) continue;
+        const t = norm(el.textContent || '');
+        if (!t || t.indexOf(raw) < 0) continue;
+        let card = el;
+        for (let i = 0; i < 4; i++) {
+          const p = card.parentElement;
+          if (!p || p === scope) break;
+          const pr = p.getBoundingClientRect();
+          if (pr.height > 200 || pr.width < 120) break;
+          if (pr.height >= 48) card = p;
+        }
+        if (!best || card.contains(best)) best = card;
+      }
+      if (best) return best;
+    }
+    return null;
+  }
+
+  /* 这个知识点里还有没完成的课件（排除刚点过的那个，避免反复点同一张卡） */
+  function pendingResource(except) {
+    const cur = except || null;
+    const last = state.lastRes || null;
+    for (const r of (API.resources || [])) {
+      if (r === cur) continue;
+      if (resDoneOne(r)) continue;
+      const name = resName(r);
+      if (last && name && norm(last.name) === norm(name) && Date.now() - last.at < 30000) continue;
+      const card = cardOf(r);
+      if (!card) continue;                 // 卡片不在“必学资源”里（多半是选学），不碰
+      if (cardDone(card)) continue;
+      return r;
+    }
+    return null;
+  }
+
+  async function openResource(r) {
+    const card = cardOf(r);
+    const name = resName(r);
+    if (!card) { step('找不到课件卡片：' + short(name, 22)); return false; }
+    step('切换课件：' + short(name, 22));
+    setBadge('切换课件：' + short(name, 22));
+    state.lastRes = { name, at: Date.now() };
+    state.resAt = Date.now();
+    clickItem(card);
+    await sleep(1800);
+    return true;
   }
 
   const store = {
@@ -589,6 +687,10 @@
     noSourceAt: 0,        // 处于“无数据源”状态的起始时间
     expandingAll: false,
     expandedAt: 0,
+    noVideoAt: 0,         // 从什么时候开始页面上没有视频（PPT 课件判断用）
+    resAt: 0,             // 上次切换课件的时间（冷却）
+    lastRes: null,        // 最近点过的课件，防止反复点同一张卡
+    nkAt: 0,              // 上次“无视频→进下一知识点”的时间
   };
 
   /* ============================ 视频 ============================ */
@@ -1389,9 +1491,12 @@
     try {
       const cur = anchorItem();
       const curKey = cur ? keyOf(cur) : '';
+      // 一个知识点可能有多个课件：同一个知识点换了课件也要能再判一次结束
+      const rNow = currentResource();
+      const advKey = (curKey || 'x') + '|' + norm(resName(rNow));
       step('检测到播放结束：' + (curKey || '(未知)'));
-      // 同一节只处理一次（ended 事件 + 轮询会重复触发）
-      if (curKey && store.get(K_ADV, '') === curKey) {
+      // 同一节同一课件只处理一次（ended 事件 + 轮询会重复触发）
+      if (curKey && store.get(K_ADV, '') === advKey) {
         step('这一节已处理过，等待下次拖动/播放');
         log('这一节已经处理过，忽略重复触发');
         return;
@@ -1468,18 +1573,30 @@
         if (!done) warn('平台进度疑似未记满（<100%），仍继续切下一节');
       }
 
+      // 这个知识点还有别的课件没看（必学 1/2 的那种）：先切课件，不切知识点
+      const pend = pendingResource(currentResource());
+      if (pend) {
+        step('本节还有未完成课件，先切课件');
+        setBadge('切换到下一个课件…');
+        if (await openResource(pend)) {
+          if (curKey) store.set(K_ADV, advKey);
+          return;
+        }
+        step('课件卡片点击失败，退回知识点推进');
+      }
+
       // 等待期间平台自己跳了：绝不能再点，否则会一次前进两节
       if (moved()) {
         step('平台已自行跳转，脚本不再点击');
         log('平台已自行跳到下一节，脚本不再点击');
-        if (curKey) store.set(K_ADV, curKey);
+        if (curKey) store.set(K_ADV, advKey);
         return;
       }
 
       await sleep(CFG.clickDelayMs);
       if (moved()) {
         log('平台已自行跳到下一节，脚本不再点击');
-        if (curKey) store.set(K_ADV, curKey);
+        if (curKey) store.set(K_ADV, advKey);
         return;
       }
 
@@ -1492,7 +1609,7 @@
         for (let attempt = 0; attempt < 2; attempt++) {
           const ok = await clickKnowledgeByName(nk);
           if (ok) {
-            if (curKey) store.set(K_ADV, curKey);
+            if (curKey) store.set(K_ADV, advKey);
             state.count += 1;
             store.set(K_COUNT, state.count);
             step('已进入：' + nk.name);
@@ -1540,7 +1657,7 @@
       log('下一节 →', label);
       setBadge('正在切到：' + label);
       store.set(K_LAST, norm(label));
-      store.set(K_ADV, curKey);       // 先占位，防止这一节重复触发
+      store.set(K_ADV, advKey);       // 先占位，防止这一节重复触发
       markSeen(target);
       state.count += 1;
       store.set(K_COUNT, state.count);
@@ -1583,6 +1700,52 @@
     }
   }
 
+  /* 页面上没有视频时：先补点没完成的课件（PPT 也算），都完成了就进下一知识点 */
+  async function handleNoVideo() {
+    if (!state.running || state.stopped || state.advancing) return;
+    if (!state.adapter) return;
+    const title = contentTitle();
+    if (!title) return;
+    // 刚点过哪张课件卡，就以它为“当前课件”（PPT 没有 video，接口里的 videoId 还是旧的）
+    let cur = currentResource();
+    const last = state.lastRes;
+    if (last && last.name && Date.now() - last.at < 120000) {
+      const hit = (API.resources || []).find((r) => norm(resName(r)) === norm(last.name));
+      if (hit) cur = hit;
+    }
+    const pend = pendingResource(cur);
+    if (pend) {
+      await openResource(pend);
+      return;
+    }
+    // 只有确认当前课件是 PPT/文档（本来就没有视频）才自动进下一知识点，
+    // 否则可能只是播放器还没加载出来，贸然点走会漏课。
+    if (!cur || !isPptResource(cur)) return;
+    if (Date.now() - (state.nkAt || 0) < 20000) return;
+    // 等平台把这张 PPT 记成“已完成”；等太久（25s）就按已学处理，避免卡死
+    const card = cardOf(cur);
+    const marked = (card && cardDone(card)) || resDoneOne(cur);
+    const waited = last && last.name && norm(last.name) === norm(resName(cur)) ? Date.now() - last.at : 0;
+    if (!marked && waited < 25000) return;
+    const nk = nextKnowledge();
+    if (!nk) {
+      setBadge('全部完成 🎉');
+      state.stopped = true;
+      store.set(K_STOP, '1');
+      return;
+    }
+    state.nkAt = Date.now();
+    step('PPT 课件已记录，进入下一知识点：' + nk.name);
+    setBadge('进入下一知识点：' + nk.name);
+    const ok = await clickKnowledgeByName(nk);
+    if (ok) {
+      state.count += 1;
+      store.set(K_COUNT, state.count);
+    } else {
+      step('下一知识点点击失败：' + nk.name);
+    }
+  }
+
   /* ============================ 主循环 ============================ */
   async function tick() {
     if (!state.running || state.ticking) return;
@@ -1609,11 +1772,35 @@
       if (captcha && visible(captcha)) return;
 
       const v = pickVideo();
-      if (!v) { updateBadge(); return; }
+      if (!v) {
+        // 没有 <video>：可能是 PPT/文档课件（点开即算学过），也可能是刚切课件还没挂上播放器
+        state.noVideoAt = state.noVideoAt || Date.now();
+        if (!state.advancing && Date.now() - state.noVideoAt > 9000) {
+          state.noVideoAt = 0;
+          handleNoVideo();
+        }
+        updateBadge();
+        return;
+      }
+      state.noVideoAt = 0;
       if (v !== state.video) attach(v);
       applyPrefs(v);
 
       if (state.advancing) return;
+
+      // 这个知识点有多个课件（必学 1/2）：当前这个已经完成，就别再重看，直接切到没完成的那个
+      if (API.resources.length > 1 && Date.now() - (API.resourceAt || 0) < 90000 &&
+          Date.now() - (state.resAt || 0) > 8000) {
+        const rCur = currentResource();
+        if (rCur && resDoneOne(rCur)) {
+          const rPend = pendingResource(rCur);
+          if (rPend) {
+            step('当前课件已完成，切到未完成的课件');
+            openResource(rPend);
+            return;
+          }
+        }
+      }
 
       // 当前课时变了（这个站切课时 URL 不一定变）→ 旧视频可能还 ended，等新视频播起来
       const ck = currentKeyNow();

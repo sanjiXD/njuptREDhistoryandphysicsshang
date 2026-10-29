@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智慧树 · 智能课程自动下一节（必学 x/y）
 // @namespace    local.zhs.smartcourse
-// @version      2.0.0
+// @version      2.0.1
 // @description  适配 ai-smart-course-student-pro / smartcoursestudent：播完自动切下一知识点，未记为完成则重播
 // @author       local
 // @match        *://ai-smart-course-student-pro.zhihuishu.com/*
@@ -37,7 +37,7 @@
     verbose: true,            // 控制台日志
   };
 
-  const VERSION = '2.0.0';
+  const VERSION = '2.0.1';
   const IS_TOP = (() => { try { return window.top === window; } catch (e) { return true; } })();
 
   /* ---------- 关键接口嗅探 ----------
@@ -247,6 +247,15 @@
     return typeof r.schedule === 'number' && r.schedule >= 100;
   }
 
+  /* 严格匹配：只有接口真的按 videoId 认出当前视频时才算。
+     刚切知识点时旧 <video> 还在，用兜底猜的资源会对错课件。 */
+  function strictResource() {
+    const list = API.resources || [];
+    if (!list.length || !API.videoId) return null;
+    return list.find((r) => r && r.resourcesDetail &&
+      String(r.resourcesDetail.resourcesFileId) === String(API.videoId)) || null;
+  }
+
   function apiInfo() {
     const r = currentResource();
     if (!r) return null;
@@ -331,8 +340,31 @@
     return null;
   }
 
+  function resNodeOf(list) {
+    for (const r of (list || [])) {
+      const n = r && r.resourcesDetail && r.resourcesDetail.nodeUid;
+      if (n != null && String(n)) return String(n);
+    }
+    return '';
+  }
+
+  /* 资源清单可能是上一个知识点的（切知识点后还没重新请求），
+     用 nodeUid 和当前大标题对一下，避免把别的知识点的课件点开。 */
+  function resourcesBelongHere() {
+    const list = API.resources || [];
+    if (!list.length) return false;
+    const node = resNodeOf(list);
+    if (!node) return true;               // 没有 nodeUid 就按老逻辑
+    const title = contentTitle();
+    if (!title) return true;
+    const k = API.knowledge.find((x) => x.id === node);
+    if (k) return norm(k.name) === title;
+    return false;
+  }
+
   /* 这个知识点里还有没完成的课件（排除刚点过的那个，避免反复点同一张卡） */
   function pendingResource(except) {
+    if (!resourcesBelongHere()) return null;
     const cur = except || null;
     const last = state.lastRes || null;
     for (const r of (API.resources || [])) {
@@ -1574,7 +1606,7 @@
       }
 
       // 这个知识点还有别的课件没看（必学 1/2 的那种）：先切课件，不切知识点
-      const pend = pendingResource(currentResource());
+      const pend = pendingResource(strictResource() || currentResource());
       if (pend) {
         step('本节还有未完成课件，先切课件');
         setBadge('切换到下一个课件…');
@@ -1791,7 +1823,7 @@
       // 这个知识点有多个课件（必学 1/2）：当前这个已经完成，就别再重看，直接切到没完成的那个
       if (API.resources.length > 1 && Date.now() - (API.resourceAt || 0) < 90000 &&
           Date.now() - (state.resAt || 0) > 8000) {
-        const rCur = currentResource();
+        const rCur = strictResource();   // 必须按 videoId 认出来，不能用兜底猜的
         if (rCur && resDoneOne(rCur)) {
           const rPend = pendingResource(rCur);
           if (rPend) {
@@ -2067,6 +2099,30 @@
     },
     steps: () => STEPS.slice(),
     play: () => forcePlay(state.video),
+    /* 课件诊断：跑在“必学 1/2”那个知识点上，把返回值发我 */
+    res: () => {
+      const list = API.resources || [];
+      return {
+        title: contentTitle(),
+        belongs: resourcesBelongHere(),
+        listNode: resNodeOf(list),
+        listAge: API.resourceAt ? Math.round((Date.now() - API.resourceAt) / 1000) + 's' : null,
+        list: list.map((r) => {
+          const card = cardOf(r);
+          return {
+            name: resName(r),
+            node: String((r.resourcesDetail || {}).nodeUid || ''),
+            status: r.studyStatus,
+            schedule: r.schedule,
+            time: (r.resourcesDetail || {}).resourcesTime,
+            ppt: isPptResource(r),
+            hasCard: !!card,
+            cardDone: cardDone(card),
+            isCurrent: r === currentResource(),
+          };
+        }),
+      };
+    },
     api: () => ({
       videoId: API.videoId,
       updatedAt: API.resourceAt ? new Date(API.resourceAt).toLocaleTimeString() : null,
